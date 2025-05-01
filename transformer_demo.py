@@ -7,6 +7,21 @@ from collections import Counter
 from wordcloud import WordCloud
 import time
 
+# ---------------- Stopword List ----------------
+BUILTIN_STOPWORDS = set("""
+a about above after again against all am an and any are aren't as at be because been
+before being below between both but by can't cannot could couldn't did didn't do does
+doesn't doing don't down during each few for from further had hadn't has hasn't have
+haven't having he he'd he'll he's her here here's hers herself him himself his how how's
+i i'd i'll i'm i've if in into is isn't it it's its itself let's me more most mustn't my
+myself no nor not of off on once only or other ought our ours ourselves out over own same
+shan't she she'd she'll she's should shouldn't so some such than that that's the their
+theirs them themselves then there there's these they they'd they'll they're they've this
+those through to too under until up very was wasn't we we'd we'll we're we've were weren't
+what what's when when's where where's which while who who's whom why why's with won't would
+wouldn't you you'd you'll you're you've your yours yourself yourselves
+""".split())
+
 # ----------------- Utility Functions ------------------
 
 def pad_sequences(sequences, max_len, pad_token=0):
@@ -15,8 +30,10 @@ def pad_sequences(sequences, max_len, pad_token=0):
         for seq in sequences
     ])
 
-def create_vocab(texts, vocab_size=1000):
+def create_vocab(texts, vocab_size=1000, remove_stopwords=False):
     all_words = [word for text in texts for word in text.split()]
+    if remove_stopwords:
+        all_words = [word for word in all_words if word.lower() not in BUILTIN_STOPWORDS]
     most_common_words = [word for word, _ in Counter(all_words).most_common(vocab_size - 1)]
     vocab = {word: idx + 1 for idx, word in enumerate(most_common_words)}
     vocab["<UNK>"] = 0
@@ -45,9 +62,9 @@ def softmax(x):
 
 # --------------- Transformer Pipeline ------------------
 
-def transformer(X, Y, vocab_size, d_model, num_heads, num_layers, show_step):
+def transformer(X, Y, vocab_size, d_model, num_heads, num_layers, show_step, remove_stopwords=False):
     show_step("🔡 Creating Vocabulary...")
-    vocab = create_vocab(X + Y, vocab_size)
+    vocab = create_vocab(X + Y, vocab_size, remove_stopwords)
     time.sleep(0.5)
 
     show_step("🔢 Encoding Texts...")
@@ -136,7 +153,7 @@ def plot_multi_attention_maps(n=3):
 def plot_word_cloud(texts):
     text = " ".join(texts)
     wordcloud = WordCloud(width=800, height=400, background_color="white").generate(text)
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(5, 5))
     ax.imshow(wordcloud, interpolation='bilinear')
     ax.axis("off")
     ax.set_title("Word Cloud of Input + Target Texts")
@@ -145,21 +162,31 @@ def plot_word_cloud(texts):
 # ----------------- Streamlit App ------------------------
 
 st.set_page_config(page_title="Transformer Visualizer", layout="wide")
-
 st.title("🔍 Transformer Pipeline Visualizer")
-st.markdown("This app simulates a basic Transformer encoder-decoder architecture and visualizes components.")
+st.markdown("Upload your Excel file with articles to visualize how a Transformer processes them.")
 
-# Input Data
-st.subheader("📥 Input Data")
-default_data = [
-    {"Input Text (X)": "the sky is blue", "Target Text (Y)": "le ciel est bleu"},
-    {"Input Text (X)": "hello world", "Target Text (Y)": "bonjour le monde"}
-]
-input_df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
+# Upload Excel file
+uploaded_file = st.file_uploader("📤 Upload Excel File", type=["xlsx"])
 
-# Convert list of dicts to DataFrame if needed
-if isinstance(input_df, list):
-    input_df = pd.DataFrame(input_df)
+if uploaded_file is not None:
+    try:
+        df = pd.read_excel(uploaded_file)
+        columns = df.columns.tolist()
+
+        if "Input Text (X)" in columns and "Target Text (Y)" in columns:
+            input_df = df[["Input Text (X)", "Target Text (Y)"]].copy()
+        else:
+            first_col = columns[0]
+            input_df = pd.DataFrame()
+            input_df["Input Text (X)"] = df[first_col].astype(str)
+            input_df["Target Text (Y)"] = ["<empty>" for _ in range(len(df))]
+            st.warning("⚠️ 'Target Text (Y)' not found — filled with placeholders.")
+    except Exception as e:
+        st.error(f"❌ Error reading Excel file: {e}")
+        st.stop()
+else:
+    st.info("Please upload an Excel file with either a single column or 'Input Text (X)' and 'Target Text (Y)'")
+    st.stop()
 
 X_input = input_df["Input Text (X)"].fillna("").tolist()
 Y_input = input_df["Target Text (Y)"].fillna("").tolist()
@@ -171,6 +198,7 @@ with st.sidebar:
     num_heads = st.slider("Attention Heads", 1, 8, 4)
     num_layers = st.slider("Encoder/Decoder Layers", 1, 6, 2)
     vocab_size = st.slider("Vocabulary Size", 100, 2000, 1000, step=100)
+    remove_stop = st.checkbox("Remove Stopwords from Vocabulary", value=True)
 
 status = st.empty()
 
@@ -179,7 +207,9 @@ if st.button("🚀 Run Transformer"):
     def update_status(msg):
         status.info(msg)
 
-    output, token_ids, vocab = transformer(X_input, Y_input, vocab_size, d_model, num_heads, num_layers, update_status)
+    output, token_ids, vocab = transformer(
+        X_input, Y_input, vocab_size, d_model, num_heads, num_layers, update_status, remove_stop
+    )
     st.success("✅ Transformer Finished!")
 
     st.subheader("📘 Output Sequences:")
